@@ -27,7 +27,7 @@
 
         header { text-align: center; margin-bottom: 40px; }
         header h1 { font-size: 2.5rem; color: var(--primary-dark); margin-bottom: 10px; }
-        
+
         .grid {
             display: grid;
             grid-template-columns: 1fr 350px;
@@ -54,7 +54,7 @@
             transition: all 0.3s;
         }
         .upload-zone:hover { background: #e0e7ff; }
-        
+
         /* Image Preview */
         .image-preview {
             width: 100%;
@@ -82,7 +82,7 @@
             border: 1px solid var(--border);
             transition: transform 0.2s;
         }
-        
+
         .color-row:hover { transform: translateX(-5px); border-color: var(--primary); }
 
         .color-swatch {
@@ -96,7 +96,7 @@
         .color-details { flex: 1; }
         .hex-code { font-family: monospace; font-size: 1.1rem; font-weight: 700; color: var(--text); }
         .rgb-code { font-size: 0.85rem; color: #64748b; margin-top: 4px; }
-        
+
         .copy-btn {
             padding: 8px 16px;
             background: var(--bg);
@@ -125,7 +125,7 @@
         @media (max-width: 768px) {
             .grid { grid-template-columns: 1fr; }
         }
-        
+
         /* Loader */
         .loader { display: none; margin: 20px auto; width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid var(--primary); border-radius: 50%; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -146,7 +146,7 @@
                 <h3>לחץ או גרור תמונה לכאן</h3>
                 <input type="file" id="fileInput" hidden accept="image/*">
             </div>
-            
+
             <div class="loader" id="loader"></div>
 
             <div class="image-preview" id="imagePreview">
@@ -159,7 +159,7 @@
             <div class="palette-grid" id="paletteContainer">
                 <p style="text-align: center; color: #94a3b8; padding: 40px;">המתן לתמונה...</p>
             </div>
-            
+
             <div class="actions" id="exportActions" style="display: none;">
                 <button class="btn-primary" onclick="exportCSS()">העתק כ-CSS Variables</button>
             </div>
@@ -176,9 +176,15 @@
     const loader = document.getElementById('loader');
     const exportActions = document.getElementById('exportActions');
 
-    // Event Listeners
+    // --- הגדרות רגישות (כאן השינוי הגדול) ---
+    const CONFIG = {
+        quantizeStep: 5,      // נמוך = יותר מדויק (היה 24)
+        similarityThreshold: 15, // נמוך = מרשה צבעים דומים (היה 60)
+        maxColorsToShow: 15   // כמה צבעים להציג בסוף (היה 6)
+    };
+
     dropZone.addEventListener('click', () => fileInput.click());
-    
+
     fileInput.addEventListener('change', function(e) {
         if (this.files && this.files[0]) processFile(this.files[0]);
     });
@@ -202,7 +208,7 @@
         const reader = new FileReader();
         loader.style.display = 'block';
         dropZone.style.display = 'none';
-        
+
         reader.onload = function(e) {
             sourceImage.src = e.target.result;
             sourceImage.onload = function() {
@@ -214,54 +220,46 @@
         reader.readAsDataURL(file);
     }
 
-    // --- The Smart Color Extraction Logic ---
-
     function extractColors(img) {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
-        
-        // Resize for speed, but keep enough detail
-        const maxSize = 200;
+
+        // רזולוציה מעט גבוהה יותר לדיוק
+        const maxSize = 300;
         const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
         canvas.width = img.width * scale;
         canvas.height = img.height * scale;
-        
+
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
 
         let pixels = [];
-        // Skip pixels to improve performance (scan every 5th pixel)
-        for (let i = 0; i < imageData.length; i += 20) {
+        // סורקים כל פיקסל עשירי (איזון בין מהירות לדיוק)
+        for (let i = 0; i < imageData.length; i += 40) {
             const r = imageData[i];
             const g = imageData[i + 1];
             const b = imageData[i + 2];
             const a = imageData[i + 3];
-            
-            // Ignore transparent or very dark/bright pixels (noise reduction)
+
             if (a < 128) continue;
-            
             pixels.push({r, g, b});
         }
 
-        // 1. Quantize colors (group similar colors)
         const quantizedColors = quantizeColors(pixels);
-        
-        // 2. Sort by "Smart Score" (Mix of Population + Vibrancy)
         const sortedColors = sortColorsByScore(quantizedColors);
 
-        // 3. Render
-        renderPalette(sortedColors.slice(0, 6)); // Top 6 colors
+        // מציג יותר צבעים כדי שתוכל לבחור את הירוקים הנכונים
+        renderPalette(sortedColors.slice(0, CONFIG.maxColorsToShow));
         exportActions.style.display = 'grid';
     }
 
-    // Convert RGB to HSL
     function rgbToHsl(r, g, b) {
         r /= 255, g /= 255, b /= 255;
         const max = Math.max(r, g, b), min = Math.min(r, g, b);
         let h, s, l = (max + min) / 2;
 
         if (max === min) {
-            h = s = 0; 
+            h = s = 0;
         } else {
             const d = max - min;
             s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
@@ -275,16 +273,15 @@
         return { h, s, l };
     }
 
-    // Group similar colors to avoid duplicates (Bucketing)
     function quantizeColors(pixels) {
         const colorMap = {};
-        
+
         pixels.forEach(p => {
-            // Round colors to nearest 24 to group similar shades
-            const round = (val) => Math.round(val / 24) * 24;
+            // משתמשים ב-CONFIG.quantizeStep (5 במקום 24)
+            const round = (val) => Math.round(val / CONFIG.quantizeStep) * CONFIG.quantizeStep;
             const r = round(p.r), g = round(p.g), b = round(p.b);
             const key = `${r},${g},${b}`;
-            
+
             if (!colorMap[key]) {
                 colorMap[key] = { r, g, b, count: 0, hsl: rgbToHsl(r, g, b) };
             }
@@ -294,34 +291,26 @@
         return Object.values(colorMap);
     }
 
-    // Distance between colors (to prevent duplicates in final result)
     function colorDistance(c1, c2) {
         return Math.sqrt(Math.pow(c1.r - c2.r, 2) + Math.pow(c1.g - c2.g, 2) + Math.pow(c1.b - c2.b, 2));
     }
 
-    // The Magic: Scoring Algorithm
     function sortColorsByScore(colors) {
-        // Filter out extreme colors (too white/black) unless they are huge
+        // סינון רעשים קיצוניים
         let filtered = colors.filter(c => {
-            const isGrayscale = c.hsl.s < 0.10;
-            const isExtremeLight = c.hsl.l < 0.10 || c.hsl.l > 0.90;
-            // Keep if it's very dominant (>5% of image), otherwise drop "boring" colors
-            // return c.count > (colors.length * 0.05) || (!isGrayscale && !isExtremeLight);
-            return true; // Simple version: keep all, sort better
+            return c.count > 2; // מסנן רעש אקראי
         });
 
-        // Sort: Give bonus points for Saturation (Vibrancy)
+        // מיון לפי "כוח" הצבע (רוויה + כמות)
         filtered.sort((a, b) => {
-            // Score = Population count + (Saturation * Bonus)
-            // We weigh saturation heavily so colorful accents rise to top
-            const scoreA = a.count * (1 + a.hsl.s * 2); 
-            const scoreB = b.count * (1 + b.hsl.s * 2);
+            const scoreA = a.count * (1 + a.hsl.s * 3);
+            const scoreB = b.count * (1 + b.hsl.s * 3);
             return scoreB - scoreA;
         });
 
-        // Dedup: Remove colors that look almost the same
         const distinct = [];
-        const threshold = 60; // Distance threshold
+        // משתמשים ב-CONFIG.similarityThreshold (15 במקום 60)
+        const threshold = CONFIG.similarityThreshold;
 
         for (let color of filtered) {
             let isUnique = true;
@@ -343,7 +332,7 @@
 
     function renderPalette(colors) {
         paletteContainer.innerHTML = '';
-        
+
         colors.forEach(color => {
             const hex = rgbToHex(color.r, color.g, color.b);
             const div = document.createElement('div');
@@ -352,7 +341,7 @@
                 <div class="color-swatch" style="background-color: ${hex}"></div>
                 <div class="color-details">
                     <div class="hex-code">${hex}</div>
-                    <div class="rgb-code">rgb(${color.r}, ${color.g}, ${color.b})</div>
+                    <div class="rgb-code">RGB: ${color.r}, ${color.g}, ${color.b} | Pop: ${color.count}</div>
                 </div>
                 <button class="copy-btn" onclick="copyToClipboard('${hex}', this)">העתק</button>
             `;
@@ -380,11 +369,12 @@
             css += `  --color-${i+1}: ${hex};\n`;
         });
         css += '}';
-        
+
         navigator.clipboard.writeText(css);
         alert('CSS הועתק ללוח!');
     }
 </script>
+
 
 </body>
 </html>
